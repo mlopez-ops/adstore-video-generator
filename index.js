@@ -103,6 +103,6 @@ app.post('/generate-video', authenticate, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Video generator running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Video generator service running on port ${PORT}`);
 });

@@ -9,6 +9,9 @@ const writeFile = promisify(fs.writeFile);
 const unlink = promisify(fs.unlink);
 const mkdir = promisify(fs.mkdir);
 
+console.log('🚀 Iniciando servidor...');
+console.log('📦 Cargando módulos...');
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));

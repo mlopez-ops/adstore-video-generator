@@ -95,6 +95,8 @@ app.post('/generate-video', authenticate, async (req, res) => {
       mimeType: 'video/mp4'
     });
 
+
+
   } catch (error) {
     console.error('Error generando video:', error);
     // Limpiar en caso de error
@@ -102,6 +104,9 @@ app.post('/generate-video', authenticate, async (req, res) => {
     res.status(500).json({ error: 'Error generando video', details: error.message });
   }
 });
+console.log('=== Starting Video Generator Service ===');
+console.log('PORT:', process.env.PORT || 3000);
+console.log('Node version:', process.version);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Video generator service running on port ${PORT}`);

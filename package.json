@@ -9,9 +9,8 @@
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "fluent-ffmpeg": "^2.1.2",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
     "@supabase/supabase-js": "^2.57.0"
-    
   }
 }
 

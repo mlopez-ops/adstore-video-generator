@@ -245,24 +245,48 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
     
     console.log('FFmpeg args:', ffmpegArgs.join(' '));
     
-    await new Promise((resolve, reject) => {
-      const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
-      
-      let stderrOutput = '';
-      ffmpegProcess.stderr.on('data', data => {
-        stderrOutput += data.toString();
-      });
-      
-      ffmpegProcess.on('close', code => {
-        if (code === 0) {
-          console.log('   ✓ FFmpeg completado exitosamente');
-          resolve();
-        } else {
-          console.error('   ✗ FFmpeg error, código:', code);
-          console.error('   Stderr:', stderrOutput.slice(-1000));
-          reject(new Error(`FFmpeg exited with code ${code}`));
-        }
-      });
+  await new Promise((resolve, reject) => {
+  const ffmpegProcess = spawn('ffmpeg', [
+    '-y', // Sobrescribir sin preguntar
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', concatListPath,
+    '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast', // Más rápido, menos memoria
+    '-crf', '28', // Menor calidad = menos memoria
+    '-t', String(duration * slideUrls.length + 1), // Limitar duración
+    outputPath
+  ], {
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  
+  let stderr = '';
+  ffmpegProcess.stderr.on('data', data => {
+    stderr += data.toString();
+    console.log('FFmpeg:', data.toString().slice(-200));
+  });
+  
+  ffmpegProcess.on('error', err => {
+    console.error('FFmpeg spawn error:', err);
+    reject(new Error(`FFmpeg spawn failed: ${err.message}`));
+  });
+  
+  ffmpegProcess.on('close', code => {
+    if (code === 0) {
+      resolve();
+    } else {
+      console.error('FFmpeg stderr:', stderr.slice(-500));
+      reject(new Error(`FFmpeg exited with code ${code}`));
+    }
+  });
+  
+  // Timeout de seguridad (30 segundos)
+  setTimeout(() => {
+    ffmpegProcess.kill('SIGKILL');
+    reject(new Error('FFmpeg timeout after 30s'));
+  }, 30000);
+});
       
       ffmpegProcess.on('error', err => {
         console.error('   ✗ Error spawning FFmpeg:', err.message);

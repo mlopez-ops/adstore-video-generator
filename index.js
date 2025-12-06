@@ -1,18 +1,11 @@
 // ============================================
-// LOGGING INMEDIATO - ANTES DE CUALQUIER COSA
+// VIDEO GENERATOR SERVICE - RAILWAY
 // ============================================
 console.log('==============================================');
 console.log('=== SERVIDOR VIDEO GENERATOR INICIANDO ===');
 console.log('==============================================');
 console.log('Timestamp:', new Date().toISOString());
 console.log('Node version:', process.version);
-console.log('Platform:', process.platform);
-console.log('Architecture:', process.arch);
-console.log('Current directory:', process.cwd());
-console.log('Environment variables:');
-console.log('  - PORT:', process.env.PORT);
-console.log('  - NODE_ENV:', process.env.NODE_ENV);
-console.log('  - API_KEY exists:', !!process.env.API_KEY);
 
 // ============================================
 // MANEJADORES DE ERRORES GLOBALES
@@ -27,81 +20,33 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('=== UNHANDLED REJECTION ===');
   console.error('Reason:', reason);
-  console.error('Promise:', promise);
 });
 
 // ============================================
-// CARGA DE MÓDULOS CON LOGGING
+// CARGA DE MÓDULOS
 // ============================================
-console.log('\n--- Cargando módulos ---');
-
-let express, cors, fetch, fs, path, os;
+const express = require('express');
+const cors = require('cors');
+const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const { createClient } = require('@supabase/supabase-js');
 
-// Express
-console.log('1. Cargando express...');
-try {
-  express = require('express');
-  console.log('   ✓ Express cargado correctamente');
-} catch (error) {
-  console.error('   ✗ ERROR cargando express:', error.message);
-  process.exit(1);
-}
-
-// CORS
-console.log('2. Cargando cors...');
-try {
-  cors = require('cors');
-  console.log('   ✓ CORS cargado correctamente');
-} catch (error) {
-  console.error('   ✗ ERROR cargando cors:', error.message);
-  process.exit(1);
-}
-
-// Node-fetch
-console.log('3. Cargando node-fetch...');
-try {
-  fetch = require('node-fetch');
-  console.log('   ✓ Node-fetch cargado correctamente');
-} catch (error) {
-  console.error('   ✗ ERROR cargando node-fetch:', error.message);
-  process.exit(1);
-}
-
-// FS y Path (built-in)
-console.log('4. Cargando fs, path, os...');
-try {
-  fs = require('fs');
-  path = require('path');
-  os = require('os');
-  console.log('   ✓ FS, Path y OS cargados correctamente');
-} catch (error) {
-  console.error('   ✗ ERROR cargando módulos built-in:', error.message);
-  process.exit(1);
-}
-
-console.log('\n--- Todos los módulos cargados exitosamente ---\n');
+console.log('✓ Todos los módulos cargados');
 
 // ============================================
 // CONFIGURACIÓN DE EXPRESS
 // ============================================
-console.log('\n--- Configurando Express ---');
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY || 'default-key';
 
-console.log('Puerto configurado:', PORT);
-console.log('API Key configurada:', API_KEY ? 'Sí (oculta)' : 'No');
-
-// Middlewares
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// ============================================
-// MIDDLEWARE DE LOGGING DE REQUESTS
-// ============================================
+// Logging de requests
 app.use((req, res, next) => {
   console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
@@ -114,14 +59,17 @@ const authenticateRequest = (req, res, next) => {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.log('✗ Sin header de autorización');
     return res.status(401).json({ error: 'No autorizado - falta token' });
   }
   
   const token = authHeader.split(' ')[1];
   if (token !== API_KEY) {
+    console.log('✗ Token inválido');
     return res.status(401).json({ error: 'No autorizado - token inválido' });
   }
   
+  console.log('✓ Autenticación exitosa');
   next();
 };
 
@@ -134,8 +82,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    node: process.version
+    uptime: process.uptime()
   });
 });
 
@@ -144,8 +91,7 @@ app.get('/', (req, res) => {
   res.json({ 
     service: 'Video Generator Service',
     version: '2.0.0',
-    status: 'running',
-    endpoints: ['/health', '/generate-video']
+    status: 'running'
   });
 });
 
@@ -154,18 +100,37 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
   console.log('=== INICIANDO GENERACIÓN DE VIDEO ===');
   const startTime = Date.now();
   
-  const { slideUrls, videoName, businessId, duration = 3, logoUrl, supabaseUrl, supabaseServiceKey } = req.body;
-  
-  console.log('Parámetros recibidos:', { 
-    slideUrls: slideUrls?.length + ' slides', 
+  const { 
+    slideUrls, 
     videoName, 
     businessId, 
-    duration,
-    logoUrl: logoUrl ? 'provided' : 'none'
+    duration = 4, 
+    logoUrl,
+    supabaseUrl, 
+    supabaseServiceKey 
+  } = req.body;
+  
+  console.log('Parámetros recibidos:', { 
+    slideUrls, 
+    videoName, 
+    businessId, 
+    duration, 
+    logoUrl: logoUrl ? 'presente' : 'no presente' 
   });
   
-  if (!slideUrls || slideUrls.length !== 2) {
-    return res.status(400).json({ success: false, error: 'Se requieren exactamente 2 slides' });
+  // Validaciones
+  if (!slideUrls || !Array.isArray(slideUrls) || slideUrls.length !== 2) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Se requieren exactamente 2 slides' 
+    });
+  }
+  
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Faltan credenciales de Supabase' 
+    });
   }
 
   const tempDir = path.join(os.tmpdir(), `video-${Date.now()}`);
@@ -174,163 +139,191 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
     fs.mkdirSync(tempDir, { recursive: true });
     console.log('Directorio temporal:', tempDir);
     
-    // Download slides
+    // Descargar slides
     console.log('Descargando slides...');
     const imagePaths = [];
     for (let i = 0; i < slideUrls.length; i++) {
       const response = await fetch(slideUrls[i]);
+      if (!response.ok) {
+        throw new Error(`Error descargando slide ${i + 1}: ${response.status}`);
+      }
       const buffer = Buffer.from(await response.arrayBuffer());
       const imagePath = path.join(tempDir, `slide_${i}.png`);
       fs.writeFileSync(imagePath, buffer);
       imagePaths.push(imagePath);
-      console.log(`   Slide ${i + 1} descargado: ${buffer.length} bytes`);
+      console.log(`✓ Slide ${i + 1} descargado (${buffer.length} bytes)`);
     }
     
-    // Download logo if provided
+    // Descargar logo si existe
     let logoPath = null;
     if (logoUrl) {
       console.log('Descargando logo...');
       try {
         const logoResponse = await fetch(logoUrl);
-        const logoBuffer = Buffer.from(await logoResponse.arrayBuffer());
-        logoPath = path.join(tempDir, 'logo.png');
-        fs.writeFileSync(logoPath, logoBuffer);
-        console.log(`   Logo descargado: ${logoBuffer.length} bytes`);
+        if (logoResponse.ok) {
+          const logoBuffer = Buffer.from(await logoResponse.arrayBuffer());
+          logoPath = path.join(tempDir, 'logo.png');
+          fs.writeFileSync(logoPath, logoBuffer);
+          console.log(`✓ Logo descargado (${logoBuffer.length} bytes)`);
+        }
       } catch (logoError) {
-        console.log('   Error descargando logo, continuando sin él:', logoError.message);
+        console.log('⚠ No se pudo descargar el logo:', logoError.message);
       }
     }
     
-    // Generate video with FFmpeg using complex filter for crossfade and logo
+    // Generar video con FFmpeg
     const outputPath = path.join(tempDir, 'output.mp4');
-    console.log('Ejecutando FFmpeg con transición crossfade...');
+    console.log('Ejecutando FFmpeg...');
     
-    // Build FFmpeg command with crossfade transition
-    const crossfadeDuration = 0.5;
-    const slideDuration = duration;
+    // Calcular duración de transición
+    const transitionDuration = 0.5;
+    const totalDuration = (duration * 2) - transitionDuration;
     
-    // Complex filter for crossfade between 2 images + optional logo overlay
-    // Output: 1920x1080 (landscape HD)
-    let filterComplex = `[0:v]loop=loop=${Math.floor((slideDuration + crossfadeDuration) * 25)}:size=1:start=0,setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v0];` +
-      `[1:v]loop=loop=${Math.floor((slideDuration + crossfadeDuration) * 25)}:size=1:start=0,setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v1];` +
-      `[v0][v1]xfade=transition=fade:duration=${crossfadeDuration}:offset=${slideDuration}[video]`;
-    
+    // Construir argumentos de FFmpeg
     let ffmpegArgs = [
-      '-i', imagePaths[0],
-      '-i', imagePaths[1]
+      '-y',
+      '-loop', '1', '-t', String(duration), '-i', imagePaths[0],
+      '-loop', '1', '-t', String(duration), '-i', imagePaths[1]
     ];
     
-    // Add logo if available
+    // Agregar logo si existe
     if (logoPath) {
       ffmpegArgs.push('-i', logoPath);
-      // Logo overlay: scale to 120px wide, position bottom-right with 30px margin
-      filterComplex += `;[2:v]scale=120:-1[logo];[video][logo]overlay=W-w-30:H-h-30[final]`;
-      filterComplex = filterComplex.replace('[final]', '[final]');
+    }
+    
+    // Construir filter_complex
+    let filterComplex;
+    if (logoPath) {
+      // Con logo y transición crossfade
+      filterComplex = [
+        // Escalar slides a 1920x1080
+        '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
+        '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
+        // Escalar logo (120px de ancho)
+        '[2:v]scale=120:-1[logo]',
+        // Aplicar crossfade entre slides
+        `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${duration - transitionDuration}[xfaded]`,
+        // Overlay del logo en esquina inferior derecha
+        '[xfaded][logo]overlay=W-w-30:H-h-30[outv]'
+      ].join(';');
     } else {
-      filterComplex = filterComplex.replace('[video]', '[final]');
+      // Solo transición crossfade, sin logo
+      filterComplex = [
+        '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
+        '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
+        `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${duration - transitionDuration}[outv]`
+      ].join(';');
     }
     
     ffmpegArgs.push(
       '-filter_complex', filterComplex,
-      '-map', '[final]',
+      '-map', '[outv]',
       '-c:v', 'libx264',
-      '-pix_fmt', 'yuv420p',
-      '-preset', 'medium',
-      '-crf', '23',
+      '-preset', 'ultrafast',
+      '-crf', '28',
       '-movflags', '+faststart',
-      '-t', String((slideDuration * 2) + crossfadeDuration),
-      '-y',
+      '-t', String(totalDuration),
       outputPath
     );
     
     console.log('FFmpeg args:', ffmpegArgs.join(' '));
     
-  await new Promise((resolve, reject) => {
-  const ffmpegProcess = spawn('ffmpeg', [
-    '-y', // Sobrescribir sin preguntar
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', concatListPath,
-    '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
-    '-c:v', 'libx264',
-    '-preset', 'ultrafast', // Más rápido, menos memoria
-    '-crf', '28', // Menor calidad = menos memoria
-    '-t', String(duration * slideUrls.length + 1), // Limitar duración
-    outputPath
-  ], {
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-  
-  let stderr = '';
-  ffmpegProcess.stderr.on('data', data => {
-    stderr += data.toString();
-    console.log('FFmpeg:', data.toString().slice(-200));
-  });
-  
-  ffmpegProcess.on('error', err => {
-    console.error('FFmpeg spawn error:', err);
-    reject(new Error(`FFmpeg spawn failed: ${err.message}`));
-  });
-  
-  ffmpegProcess.on('close', code => {
-    if (code === 0) {
-      resolve();
-    } else {
-      console.error('FFmpeg stderr:', stderr.slice(-500));
-      reject(new Error(`FFmpeg exited with code ${code}`));
-    }
-  });
-  
-  // Timeout de seguridad (30 segundos)
-  setTimeout(() => {
-    ffmpegProcess.kill('SIGKILL');
-    reject(new Error('FFmpeg timeout after 30s'));
-  }, 30000);
-});
+    await new Promise((resolve, reject) => {
+      const ffmpeg = spawn('ffmpeg', ffmpegArgs);
       
-      ffmpegProcess.on('error', err => {
-        console.error('   ✗ Error spawning FFmpeg:', err.message);
-        reject(err);
+      let stderr = '';
+      
+      ffmpeg.stderr.on('data', (data) => {
+        stderr += data.toString();
+        // Log progress
+        const timeMatch = data.toString().match(/time=(\d{2}:\d{2}:\d{2})/);
+        if (timeMatch) {
+          console.log('FFmpeg progress:', timeMatch[1]);
+        }
       });
+      
+      ffmpeg.on('close', (code) => {
+        if (code === 0) {
+          console.log('✓ FFmpeg completado exitosamente');
+          resolve();
+        } else {
+          console.error('FFmpeg stderr:', stderr);
+          reject(new Error(`FFmpeg exited with code ${code}`));
+        }
+      });
+      
+      ffmpeg.on('error', (err) => {
+        reject(new Error(`FFmpeg spawn error: ${err.message}`));
+      });
+      
+      // Timeout de 60 segundos
+      setTimeout(() => {
+        ffmpeg.kill('SIGKILL');
+        reject(new Error('FFmpeg timeout after 60 seconds'));
+      }, 60000);
     });
     
-    console.log('Video generado, subiendo a Supabase...');
+    // Verificar que el video se generó
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('El archivo de video no fue creado');
+    }
     
-    // Upload to Supabase Storage
+    const videoStats = fs.statSync(outputPath);
+    console.log(`Video generado: ${videoStats.size} bytes`);
+    
+    // Subir a Supabase Storage
+    console.log('Subiendo a Supabase Storage...');
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const videoBuffer = fs.readFileSync(outputPath);
     const videoFileName = `${businessId}/${Date.now()}_${videoName}.mp4`;
     
-    console.log(`   Tamaño del video: ${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB`);
-    
     const { error: uploadError } = await supabase.storage
       .from('generated-videos')
-      .upload(videoFileName, videoBuffer, { contentType: 'video/mp4' });
+      .upload(videoFileName, videoBuffer, { 
+        contentType: 'video/mp4',
+        upsert: false
+      });
     
-    if (uploadError) throw uploadError;
+    if (uploadError) {
+      throw new Error(`Error subiendo video: ${uploadError.message}`);
+    }
     
-    const { data: urlData } = supabase.storage.from('generated-videos').getPublicUrl(videoFileName);
+    const { data: urlData } = supabase.storage
+      .from('generated-videos')
+      .getPublicUrl(videoFileName);
     
-    // Cleanup
+    // Limpiar archivos temporales
     fs.rmSync(tempDir, { recursive: true, force: true });
+    console.log('✓ Archivos temporales eliminados');
     
     const totalTime = Date.now() - startTime;
-    console.log(`=== VIDEO GENERADO Y SUBIDO (${totalTime}ms) ===`);
+    console.log(`=== VIDEO GENERADO EXITOSAMENTE (${totalTime}ms) ===`);
     console.log('URL:', urlData.publicUrl);
     
-    res.json({ success: true, videoUrl: urlData.publicUrl });
+    res.json({ 
+      success: true, 
+      videoUrl: urlData.publicUrl,
+      processingTime: totalTime
+    });
     
   } catch (error) {
     console.error('=== ERROR GENERANDO VIDEO ===');
     console.error('Message:', error.message);
     console.error('Stack:', error.stack);
     
-    // Cleanup on error
+    // Limpiar archivos temporales en caso de error
     try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch (e) {}
+      if (fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    } catch (cleanupError) {
+      console.error('Error limpiando:', cleanupError.message);
+    }
     
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 });
 
@@ -344,20 +337,12 @@ app.use((req, res) => {
 // ============================================
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('==============================================');
-  console.log('=== SERVIDOR INICIADO ===');
-  console.log('Puerto:', PORT);
+  console.log(`=== SERVIDOR INICIADO EN PUERTO ${PORT} ===`);
   console.log('==============================================');
 });
 
-server.on('error', (error) => {
-  console.error('Error al iniciar servidor:', error.message);
-  process.exit(1);
-});
-
+// Graceful shutdown
 process.on('SIGTERM', () => {
-  server.close(() => process.exit(0));
-});
-
-process.on('SIGINT', () => {
+  console.log('SIGTERM recibido, cerrando servidor...');
   server.close(() => process.exit(0));
 });

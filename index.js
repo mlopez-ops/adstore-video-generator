@@ -397,3 +397,91 @@ process.on('SIGINT', () => {
 
 console.log('\n--- Script index.js ejecutado completamente ---');
 console.log('Esperando que el servidor inicie...\n');
+
+const { createClient } = require('@supabase/supabase-js');
+
+app.post('/generate-video', async (req, res) => {
+  const { slideUrls, videoName, businessId, duration = 3, supabaseUrl, supabaseServiceKey } = req.body;
+  
+  console.log('Received video generation request:', { slideUrls, videoName, businessId, duration });
+  
+  if (!slideUrls || slideUrls.length !== 2) {
+    return res.status(400).json({ success: false, error: 'Se requieren exactamente 2 slides' });
+  }
+
+  const tempDir = path.join(os.tmpdir(), `video-${Date.now()}`);
+  
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+    
+    // Download slides
+    console.log('Downloading slides...');
+    const imagePaths = [];
+    for (let i = 0; i < slideUrls.length; i++) {
+      const response = await fetch(slideUrls[i]);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const imagePath = path.join(tempDir, `slide_${i}.png`);
+      fs.writeFileSync(imagePath, buffer);
+      imagePaths.push(imagePath);
+    }
+    
+    // Create concat list for FFmpeg
+    const concatListPath = path.join(tempDir, 'concat_list.txt');
+    let concatContent = '';
+    for (const imagePath of imagePaths) {
+      concatContent += `file '${imagePath}'\n`;
+      concatContent += `duration ${duration}\n`;
+    }
+    concatContent += `file '${imagePaths[imagePaths.length - 1]}'\n`;
+    fs.writeFileSync(concatListPath, concatContent);
+    
+    // Generate video with FFmpeg
+    const outputPath = path.join(tempDir, 'output.mp4');
+    console.log('Running FFmpeg...');
+    
+    await new Promise((resolve, reject) => {
+      const ffmpeg = spawn('ffmpeg', [
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', concatListPath,
+        '-vsync', 'vfr',
+        '-pix_fmt', 'yuv420p',
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-crf', '23',
+        '-movflags', '+faststart',
+        outputPath
+      ]);
+      
+      ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString()));
+      ffmpeg.on('close', code => code === 0 ? resolve() : reject(new Error(`FFmpeg exited with code ${code}`)));
+    });
+    
+    console.log('Video generated, uploading to Supabase...');
+    
+    // Upload to Supabase Storage
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const videoBuffer = fs.readFileSync(outputPath);
+    const videoFileName = `${businessId}/${Date.now()}_${videoName}.mp4`;
+    
+    const { error: uploadError } = await supabase.storage
+      .from('generated-videos')
+      .upload(videoFileName, videoBuffer, { contentType: 'video/mp4' });
+    
+    if (uploadError) throw uploadError;
+    
+    const { data: urlData } = supabase.storage.from('generated-videos').getPublicUrl(videoFileName);
+    
+    // Cleanup
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    
+    console.log('Video uploaded successfully:', urlData.publicUrl);
+    res.json({ success: true, videoUrl: urlData.publicUrl });
+    
+  } catch (error) {
+    console.error('Error:', error);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});

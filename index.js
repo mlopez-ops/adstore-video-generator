@@ -35,7 +35,9 @@ process.on('unhandledRejection', (reason, promise) => {
 // ============================================
 console.log('\n--- Cargando módulos ---');
 
-let express, ffmpeg, cors, fetch, fs, path, os;
+let express, cors, fetch, fs, path, os;
+const { spawn } = require('child_process');
+const { createClient } = require('@supabase/supabase-js');
 
 // Express
 console.log('1. Cargando express...');
@@ -47,18 +49,8 @@ try {
   process.exit(1);
 }
 
-// Fluent-ffmpeg
-console.log('2. Cargando fluent-ffmpeg...');
-try {
-  ffmpeg = require('fluent-ffmpeg');
-  console.log('   ✓ Fluent-ffmpeg cargado correctamente');
-} catch (error) {
-  console.error('   ✗ ERROR cargando fluent-ffmpeg:', error.message);
-  process.exit(1);
-}
-
 // CORS
-console.log('3. Cargando cors...');
+console.log('2. Cargando cors...');
 try {
   cors = require('cors');
   console.log('   ✓ CORS cargado correctamente');
@@ -68,7 +60,7 @@ try {
 }
 
 // Node-fetch
-console.log('4. Cargando node-fetch...');
+console.log('3. Cargando node-fetch...');
 try {
   fetch = require('node-fetch');
   console.log('   ✓ Node-fetch cargado correctamente');
@@ -78,7 +70,7 @@ try {
 }
 
 // FS y Path (built-in)
-console.log('5. Cargando fs y path...');
+console.log('4. Cargando fs, path, os...');
 try {
   fs = require('fs');
   path = require('path');
@@ -90,30 +82,6 @@ try {
 }
 
 console.log('\n--- Todos los módulos cargados exitosamente ---\n');
-
-// ============================================
-// CONFIGURACIÓN DE FFMPEG
-// ============================================
-console.log('--- Configurando FFmpeg ---');
-
-const ffmpegPath = '/usr/bin/ffmpeg';
-const ffprobePath = '/usr/bin/ffprobe';
-
-console.log('Verificando existencia de FFmpeg...');
-if (fs.existsSync(ffmpegPath)) {
-  console.log('   ✓ FFmpeg encontrado en:', ffmpegPath);
-  ffmpeg.setFfmpegPath(ffmpegPath);
-} else {
-  console.error('   ✗ FFmpeg NO encontrado en:', ffmpegPath);
-  console.log('   Buscando en PATH del sistema...');
-}
-
-if (fs.existsSync(ffprobePath)) {
-  console.log('   ✓ FFprobe encontrado en:', ffprobePath);
-  ffmpeg.setFfprobePath(ffprobePath);
-} else {
-  console.error('   ✗ FFprobe NO encontrado en:', ffprobePath);
-}
 
 // ============================================
 // CONFIGURACIÓN DE EXPRESS
@@ -128,18 +96,14 @@ console.log('Puerto configurado:', PORT);
 console.log('API Key configurada:', API_KEY ? 'Sí (oculta)' : 'No');
 
 // Middlewares
-console.log('Aplicando middlewares...');
 app.use(cors());
-console.log('   ✓ CORS aplicado');
 app.use(express.json({ limit: '50mb' }));
-console.log('   ✓ JSON parser aplicado (limit: 50mb)');
 
 // ============================================
 // MIDDLEWARE DE LOGGING DE REQUESTS
 // ============================================
 app.use((req, res, next) => {
   console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  console.log('   Headers:', JSON.stringify(req.headers, null, 2).substring(0, 500));
   next();
 });
 
@@ -147,263 +111,58 @@ app.use((req, res, next) => {
 // MIDDLEWARE DE AUTENTICACIÓN
 // ============================================
 const authenticateRequest = (req, res, next) => {
-  console.log('   Verificando autenticación...');
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    console.log('   ✗ Sin header de autorización');
     return res.status(401).json({ error: 'No autorizado - falta token' });
   }
   
   const token = authHeader.split(' ')[1];
   if (token !== API_KEY) {
-    console.log('   ✗ Token inválido');
     return res.status(401).json({ error: 'No autorizado - token inválido' });
   }
   
-  console.log('   ✓ Autenticación exitosa');
   next();
 };
 
 // ============================================
 // RUTAS
 // ============================================
-console.log('\n--- Configurando rutas ---');
 
-// Health check (sin autenticación)
+// Health check
 app.get('/health', (req, res) => {
-  console.log('   Health check solicitado');
-  const healthInfo = {
+  res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    node: process.version,
-    ffmpeg: fs.existsSync(ffmpegPath) ? 'installed' : 'not found'
-  };
-  console.log('   Respondiendo:', JSON.stringify(healthInfo));
-  res.json(healthInfo);
+    node: process.version
+  });
 });
-console.log('   ✓ GET /health configurado');
 
 // Root
 app.get('/', (req, res) => {
-  console.log('   Root endpoint solicitado');
   res.json({ 
     service: 'Video Generator Service',
-    version: '1.0.0',
+    version: '2.0.0',
     status: 'running',
     endpoints: ['/health', '/generate-video']
   });
 });
-console.log('   ✓ GET / configurado');
 
-// Generate video (con autenticación)
+// Generate video
 app.post('/generate-video', authenticateRequest, async (req, res) => {
   console.log('=== INICIANDO GENERACIÓN DE VIDEO ===');
   const startTime = Date.now();
   
-  try {
-    const { slideUrls, videoName, duration = 3 } = req.body;
-    
-    console.log('Parámetros recibidos:');
-    console.log('   - slideUrls:', slideUrls);
-    console.log('   - videoName:', videoName);
-    console.log('   - duration:', duration);
-    
-    // Validaciones
-    if (!slideUrls || !Array.isArray(slideUrls) || slideUrls.length === 0) {
-      console.log('   ✗ Error: slideUrls inválido');
-      return res.status(400).json({ error: 'slideUrls es requerido y debe ser un array' });
-    }
-    
-    if (!videoName) {
-      console.log('   ✗ Error: videoName requerido');
-      return res.status(400).json({ error: 'videoName es requerido' });
-    }
-    
-    // Crear directorio temporal
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-'));
-    console.log('   Directorio temporal creado:', tempDir);
-    
-    // Descargar imágenes
-    console.log('   Descargando imágenes...');
-    const imagePaths = [];
-    
-    for (let i = 0; i < slideUrls.length; i++) {
-      const url = slideUrls[i];
-      console.log(`   Descargando imagen ${i + 1}/${slideUrls.length}: ${url.substring(0, 50)}...`);
-      
-      try {
-        const response = await fetch(url);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const buffer = await response.buffer();
-        const imagePath = path.join(tempDir, `slide_${i}.png`);
-        fs.writeFileSync(imagePath, buffer);
-        imagePaths.push(imagePath);
-        console.log(`   ✓ Imagen ${i + 1} guardada: ${imagePath} (${buffer.length} bytes)`);
-      } catch (downloadError) {
-        console.error(`   ✗ Error descargando imagen ${i + 1}:`, downloadError.message);
-        throw new Error(`Error descargando imagen ${i + 1}: ${downloadError.message}`);
-      }
-    }
-    
-    // Crear archivo de lista para FFmpeg
-    const listPath = path.join(tempDir, 'list.txt');
-    let listContent = '';
-    for (const imgPath of imagePaths) {
-      listContent += `file '${imgPath}'\n`;
-      listContent += `duration ${duration}\n`;
-    }
-    listContent += `file '${imagePaths[imagePaths.length - 1]}'\n`;
-    fs.writeFileSync(listPath, listContent);
-    console.log('   Lista FFmpeg creada:', listPath);
-    console.log('   Contenido:', listContent);
-    
-    // Generar video
-    const outputPath = path.join(tempDir, `${videoName}.mp4`);
-    console.log('   Generando video con FFmpeg...');
-    console.log('   Output:', outputPath);
-    
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(listPath)
-        .inputOptions(['-f', 'concat', '-safe', '0'])
-        .outputOptions([
-          '-vsync', 'vfr',
-          '-pix_fmt', 'yuv420p',
-          '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
-          '-c:v', 'libx264',
-          '-preset', 'medium',
-          '-crf', '23',
-          '-movflags', '+faststart'
-        ])
-        .output(outputPath)
-        .on('start', (cmd) => {
-          console.log('   FFmpeg comando:', cmd);
-        })
-        .on('progress', (progress) => {
-          console.log('   Progreso:', progress.percent ? `${progress.percent.toFixed(1)}%` : 'procesando...');
-        })
-        .on('end', () => {
-          console.log('   ✓ FFmpeg completado');
-          resolve();
-        })
-        .on('error', (err) => {
-          console.error('   ✗ FFmpeg error:', err.message);
-          reject(err);
-        })
-        .run();
-    });
-    
-    // Leer video generado
-    console.log('   Leyendo video generado...');
-    const videoBuffer = fs.readFileSync(outputPath);
-    console.log('   Video size:', videoBuffer.length, 'bytes');
-    
-    // Limpiar archivos temporales
-    console.log('   Limpiando archivos temporales...');
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    console.log('   ✓ Limpieza completada');
-    
-    const totalTime = Date.now() - startTime;
-    console.log(`=== VIDEO GENERADO EXITOSAMENTE (${totalTime}ms) ===`);
-    
-    // Responder con el video en base64
-    res.json({
-      success: true,
-      videoBase64: videoBuffer.toString('base64'),
-      fileName: `${videoName}.mp4`,
-      size: videoBuffer.length,
-      processingTime: totalTime
-    });
-    
-  } catch (error) {
-    console.error('=== ERROR GENERANDO VIDEO ===');
-    console.error('Message:', error.message);
-    console.error('Stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Error generando video',
-      details: error.message 
-    });
-  }
-});
-console.log('   ✓ POST /generate-video configurado');
-
-// 404 handler
-app.use((req, res) => {
-  console.log('   ✗ Ruta no encontrada:', req.method, req.url);
-  res.status(404).json({ error: 'Ruta no encontrada' });
-});
-
-// Error handler global
-app.use((err, req, res, next) => {
-  console.error('=== ERROR GLOBAL EN EXPRESS ===');
-  console.error('Message:', err.message);
-  console.error('Stack:', err.stack);
-  res.status(500).json({ error: 'Error interno del servidor' });
-});
-
-// ============================================
-// INICIAR SERVIDOR
-// ============================================
-console.log('\n--- Iniciando servidor ---');
-console.log('Intentando escuchar en puerto', PORT, 'en 0.0.0.0...');
-
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('==============================================');
-  console.log('=== SERVIDOR INICIADO EXITOSAMENTE ===');
-  console.log('==============================================');
-  console.log('Puerto:', PORT);
-  console.log('Host: 0.0.0.0');
-  console.log('Timestamp:', new Date().toISOString());
-  console.log('PID:', process.pid);
-  console.log('Endpoints disponibles:');
-  console.log('   - GET  /');
-  console.log('   - GET  /health');
-  console.log('   - POST /generate-video');
-  console.log('==============================================');
-});
-
-server.on('error', (error) => {
-  console.error('=== ERROR AL INICIAR SERVIDOR ===');
-  console.error('Code:', error.code);
-  console.error('Message:', error.message);
-  if (error.code === 'EADDRINUSE') {
-    console.error('El puerto', PORT, 'ya está en uso');
-  }
-  process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('\n=== SIGTERM recibido, cerrando servidor... ===');
-  server.close(() => {
-    console.log('Servidor cerrado correctamente');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('\n=== SIGINT recibido, cerrando servidor... ===');
-  server.close(() => {
-    console.log('Servidor cerrado correctamente');
-    process.exit(0);
-  });
-});
-
-console.log('\n--- Script index.js ejecutado completamente ---');
-console.log('Esperando que el servidor inicie...\n');
-
-const { createClient } = require('@supabase/supabase-js');
-
-app.post('/generate-video', async (req, res) => {
-  const { slideUrls, videoName, businessId, duration = 3, supabaseUrl, supabaseServiceKey } = req.body;
+  const { slideUrls, videoName, businessId, duration = 3, logoUrl, supabaseUrl, supabaseServiceKey } = req.body;
   
-  console.log('Received video generation request:', { slideUrls, videoName, businessId, duration });
+  console.log('Parámetros recibidos:', { 
+    slideUrls: slideUrls?.length + ' slides', 
+    videoName, 
+    businessId, 
+    duration,
+    logoUrl: logoUrl ? 'provided' : 'none'
+  });
   
   if (!slideUrls || slideUrls.length !== 2) {
     return res.status(400).json({ success: false, error: 'Se requieren exactamente 2 slides' });
@@ -413,9 +172,10 @@ app.post('/generate-video', async (req, res) => {
   
   try {
     fs.mkdirSync(tempDir, { recursive: true });
+    console.log('Directorio temporal:', tempDir);
     
     // Download slides
-    console.log('Downloading slides...');
+    console.log('Descargando slides...');
     const imagePaths = [];
     for (let i = 0; i < slideUrls.length; i++) {
       const response = await fetch(slideUrls[i]);
@@ -423,47 +183,101 @@ app.post('/generate-video', async (req, res) => {
       const imagePath = path.join(tempDir, `slide_${i}.png`);
       fs.writeFileSync(imagePath, buffer);
       imagePaths.push(imagePath);
+      console.log(`   Slide ${i + 1} descargado: ${buffer.length} bytes`);
     }
     
-    // Create concat list for FFmpeg
-    const concatListPath = path.join(tempDir, 'concat_list.txt');
-    let concatContent = '';
-    for (const imagePath of imagePaths) {
-      concatContent += `file '${imagePath}'\n`;
-      concatContent += `duration ${duration}\n`;
+    // Download logo if provided
+    let logoPath = null;
+    if (logoUrl) {
+      console.log('Descargando logo...');
+      try {
+        const logoResponse = await fetch(logoUrl);
+        const logoBuffer = Buffer.from(await logoResponse.arrayBuffer());
+        logoPath = path.join(tempDir, 'logo.png');
+        fs.writeFileSync(logoPath, logoBuffer);
+        console.log(`   Logo descargado: ${logoBuffer.length} bytes`);
+      } catch (logoError) {
+        console.log('   Error descargando logo, continuando sin él:', logoError.message);
+      }
     }
-    concatContent += `file '${imagePaths[imagePaths.length - 1]}'\n`;
-    fs.writeFileSync(concatListPath, concatContent);
     
-    // Generate video with FFmpeg
+    // Generate video with FFmpeg using complex filter for crossfade and logo
     const outputPath = path.join(tempDir, 'output.mp4');
-    console.log('Running FFmpeg...');
+    console.log('Ejecutando FFmpeg con transición crossfade...');
+    
+    // Build FFmpeg command with crossfade transition
+    const crossfadeDuration = 0.5;
+    const slideDuration = duration;
+    
+    // Complex filter for crossfade between 2 images + optional logo overlay
+    // Output: 1920x1080 (landscape HD)
+    let filterComplex = `[0:v]loop=loop=${Math.floor((slideDuration + crossfadeDuration) * 25)}:size=1:start=0,setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v0];` +
+      `[1:v]loop=loop=${Math.floor((slideDuration + crossfadeDuration) * 25)}:size=1:start=0,setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v1];` +
+      `[v0][v1]xfade=transition=fade:duration=${crossfadeDuration}:offset=${slideDuration}[video]`;
+    
+    let ffmpegArgs = [
+      '-i', imagePaths[0],
+      '-i', imagePaths[1]
+    ];
+    
+    // Add logo if available
+    if (logoPath) {
+      ffmpegArgs.push('-i', logoPath);
+      // Logo overlay: scale to 120px wide, position bottom-right with 30px margin
+      filterComplex += `;[2:v]scale=120:-1[logo];[video][logo]overlay=W-w-30:H-h-30[final]`;
+      filterComplex = filterComplex.replace('[final]', '[final]');
+    } else {
+      filterComplex = filterComplex.replace('[video]', '[final]');
+    }
+    
+    ffmpegArgs.push(
+      '-filter_complex', filterComplex,
+      '-map', '[final]',
+      '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p',
+      '-preset', 'medium',
+      '-crf', '23',
+      '-movflags', '+faststart',
+      '-t', String((slideDuration * 2) + crossfadeDuration),
+      '-y',
+      outputPath
+    );
+    
+    console.log('FFmpeg args:', ffmpegArgs.join(' '));
     
     await new Promise((resolve, reject) => {
-      const ffmpeg = spawn('ffmpeg', [
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', concatListPath,
-        '-vsync', 'vfr',
-        '-pix_fmt', 'yuv420p',
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
-        '-c:v', 'libx264',
-        '-preset', 'medium',
-        '-crf', '23',
-        '-movflags', '+faststart',
-        outputPath
-      ]);
+      const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
       
-      ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString()));
-      ffmpeg.on('close', code => code === 0 ? resolve() : reject(new Error(`FFmpeg exited with code ${code}`)));
+      let stderrOutput = '';
+      ffmpegProcess.stderr.on('data', data => {
+        stderrOutput += data.toString();
+      });
+      
+      ffmpegProcess.on('close', code => {
+        if (code === 0) {
+          console.log('   ✓ FFmpeg completado exitosamente');
+          resolve();
+        } else {
+          console.error('   ✗ FFmpeg error, código:', code);
+          console.error('   Stderr:', stderrOutput.slice(-1000));
+          reject(new Error(`FFmpeg exited with code ${code}`));
+        }
+      });
+      
+      ffmpegProcess.on('error', err => {
+        console.error('   ✗ Error spawning FFmpeg:', err.message);
+        reject(err);
+      });
     });
     
-    console.log('Video generated, uploading to Supabase...');
+    console.log('Video generado, subiendo a Supabase...');
     
     // Upload to Supabase Storage
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const videoBuffer = fs.readFileSync(outputPath);
     const videoFileName = `${businessId}/${Date.now()}_${videoName}.mp4`;
+    
+    console.log(`   Tamaño del video: ${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB`);
     
     const { error: uploadError } = await supabase.storage
       .from('generated-videos')
@@ -476,12 +290,50 @@ app.post('/generate-video', async (req, res) => {
     // Cleanup
     fs.rmSync(tempDir, { recursive: true, force: true });
     
-    console.log('Video uploaded successfully:', urlData.publicUrl);
+    const totalTime = Date.now() - startTime;
+    console.log(`=== VIDEO GENERADO Y SUBIDO (${totalTime}ms) ===`);
+    console.log('URL:', urlData.publicUrl);
+    
     res.json({ success: true, videoUrl: urlData.publicUrl });
     
   } catch (error) {
-    console.error('Error:', error);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    console.error('=== ERROR GENERANDO VIDEO ===');
+    console.error('Message:', error.message);
+    console.error('Stack:', error.stack);
+    
+    // Cleanup on error
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (e) {}
+    
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Ruta no encontrada' });
+});
+
+// ============================================
+// INICIAR SERVIDOR
+// ============================================
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log('==============================================');
+  console.log('=== SERVIDOR INICIADO ===');
+  console.log('Puerto:', PORT);
+  console.log('==============================================');
+});
+
+server.on('error', (error) => {
+  console.error('Error al iniciar servidor:', error.message);
+  process.exit(1);
+});
+
+process.on('SIGTERM', () => {
+  server.close(() => process.exit(0));
+});
+
+process.on('SIGINT', () => {
+  server.close(() => process.exit(0));
 });

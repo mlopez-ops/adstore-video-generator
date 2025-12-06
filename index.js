@@ -1,3 +1,8 @@
+console.log('=== SERVIDOR INICIANDO ===');
+console.log('Timestamp:', new Date().toISOString());
+console.log('Node version:', process.version);
+console.log('PORT env:', process.env.PORT);
+
 const express = require('express');
 const ffmpeg = require('fluent-ffmpeg');
 const axios = require('axios');

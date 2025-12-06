@@ -1,121 +1,110 @@
+// Logging inmediato ANTES de cualquier import
 console.log('=== SERVIDOR INICIANDO ===');
 console.log('Timestamp:', new Date().toISOString());
 console.log('Node version:', process.version);
 console.log('PORT env:', process.env.PORT);
 
-const express = require('express');
-const ffmpeg = require('fluent-ffmpeg');
-const axios = require('axios');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
-const { promisify } = require('util');
-const writeFile = promisify(fs.writeFile);
-const unlink = promisify(fs.unlink);
-const mkdir = promisify(fs.mkdir);
+// Manejo de errores no capturados
+process.on('uncaughtException', (err) => {
+  console.error('💥 UNCAUGHT EXCEPTION:', err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
 
-console.log('🚀 Iniciando servidor...');
-console.log('📦 Cargando módulos...');
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 UNHANDLED REJECTION:', reason);
+});
 
+// Imports con try-catch
+let express, ffmpeg, cors, fetch, Readable;
+
+try {
+  console.log('📦 Cargando express...');
+  express = require('express');
+  console.log('✅ express cargado');
+} catch (e) {
+  console.error('❌ Error cargando express:', e.message);
+  process.exit(1);
+}
+
+try {
+  console.log('📦 Cargando fluent-ffmpeg...');
+  ffmpeg = require('fluent-ffmpeg');
+  console.log('✅ fluent-ffmpeg cargado');
+  
+  // Configurar path explícito de FFmpeg
+  ffmpeg.setFfmpegPath('/usr/bin/ffmpeg');
+  ffmpeg.setFfprobePath('/usr/bin/ffprobe');
+  console.log('✅ FFmpeg paths configurados');
+} catch (e) {
+  console.error('❌ Error cargando fluent-ffmpeg:', e.message);
+  process.exit(1);
+}
+
+try {
+  console.log('📦 Cargando cors...');
+  cors = require('cors');
+  console.log('✅ cors cargado');
+} catch (e) {
+  console.error('❌ Error cargando cors:', e.message);
+  process.exit(1);
+}
+
+try {
+  console.log('📦 Cargando node-fetch...');
+  const nodeFetch = require('node-fetch');
+  fetch = nodeFetch.default || nodeFetch;
+  Readable = require('stream').Readable;
+  console.log('✅ node-fetch cargado');
+} catch (e) {
+  console.error('❌ Error cargando node-fetch:', e.message);
+  process.exit(1);
+}
+
+console.log('✅ Todos los módulos cargados correctamente');
+
+// Crear app Express
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-const API_KEY = process.env.API_KEY || 'development-key';
-const PORT = process.env.PORT || 3000;
+console.log('✅ Express app configurada');
 
-// Middleware de autenticación
-const authenticate = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || authHeader !== `Bearer ${API_KEY}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  next();
-};
-
-// Health check
+// Health check SIMPLE
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  console.log('📥 Health check recibido');
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
 });
 
-// Endpoint principal para generar video
-app.post('/generate-video', authenticate, async (req, res) => {
-  const { slides, duration = 4, width = 1080, height = 1920 } = req.body;
-  
-  if (!slides || !Array.isArray(slides) || slides.length < 2) {
-    return res.status(400).json({ error: 'Se requieren al menos 2 slides' });
-  }
-
-  const tempDir = path.join('/tmp', `video-${Date.now()}`);
-  const outputPath = path.join(tempDir, 'output.mp4');
-  
-  try {
-    await mkdir(tempDir, { recursive: true });
-    
-    // Descargar imágenes
-    const imagePaths = [];
-    for (let i = 0; i < slides.length; i++) {
-      const response = await axios.get(slides[i], { responseType: 'arraybuffer' });
-      const imagePath = path.join(tempDir, `slide-${i}.png`);
-      await writeFile(imagePath, response.data);
-      imagePaths.push(imagePath);
-    }
-
-    // Crear archivo de concat para FFmpeg
-    const concatFilePath = path.join(tempDir, 'concat.txt');
-    const concatContent = imagePaths.map(p => `file '${p}'\nduration ${duration}`).join('\n');
-    await writeFile(concatFilePath, concatContent + `\nfile '${imagePaths[imagePaths.length - 1]}'`);
-
-    // Generar video
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(concatFilePath)
-        .inputOptions(['-f', 'concat', '-safe', '0'])
-        .outputOptions([
-          `-vf`, `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`,
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-crf', '23',
-          '-pix_fmt', 'yuv420p',
-          '-movflags', '+faststart'
-        ])
-        .output(outputPath)
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
-    });
-
-    // Leer el video generado y convertir a base64
-    const videoBuffer = fs.readFileSync(outputPath);
-    const videoBase64 = videoBuffer.toString('base64');
-
-    // Limpiar archivos temporales
-    for (const imagePath of imagePaths) {
-      await unlink(imagePath).catch(() => {});
-    }
-    await unlink(concatFilePath).catch(() => {});
-    await unlink(outputPath).catch(() => {});
-    fs.rmdirSync(tempDir, { recursive: true });
-
-    res.json({ 
-      success: true,
-      video: videoBase64,
-      mimeType: 'video/mp4'
-    });
-
-
-
-  } catch (error) {
-    console.error('Error generando video:', error);
-    // Limpiar en caso de error
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    res.status(500).json({ error: 'Error generando video', details: error.message });
-  }
+// Ruta raíz
+app.get('/', (req, res) => {
+  res.json({ message: 'Video Generator API', status: 'running' });
 });
-console.log('=== Starting Video Generator Service ===');
-console.log('PORT:', process.env.PORT || 3000);
-console.log('Node version:', process.version);
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Video generator service running on port ${PORT}`);
+// Iniciar servidor
+const PORT = process.env.PORT || 3000;
+console.log('🚀 Intentando iniciar servidor en puerto:', PORT);
+
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log('========================================');
+  console.log(`✅ SERVIDOR CORRIENDO EN PUERTO ${PORT}`);
+  console.log('========================================');
+});
+
+server.on('error', (err) => {
+  console.error('❌ Error al iniciar servidor:', err.message);
+  process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM recibido');
+  server.close(() => {
+    console.log('👋 Servidor cerrado');
+    process.exit(0);
+  });
 });

@@ -46,7 +46,6 @@ const API_KEY = process.env.API_KEY || 'default-key';
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Logging de requests
 app.use((req, res, next) => {
   console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
@@ -77,7 +76,6 @@ const authenticateRequest = (req, res, next) => {
 // RUTAS
 // ============================================
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -86,16 +84,17 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Root
 app.get('/', (req, res) => {
   res.json({ 
     service: 'Video Generator Service',
-    version: '2.0.0',
+    version: '2.1.0',
     status: 'running'
   });
 });
 
-// Generate video
+// ============================================
+// GENERAR VIDEO (2 o 3 slides)
+// ============================================
 app.post('/generate-video', authenticateRequest, async (req, res) => {
   console.log('=== INICIANDO GENERACIÓN DE VIDEO ===');
   const startTime = Date.now();
@@ -110,19 +109,20 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
     supabaseServiceKey 
   } = req.body;
   
+  const slideCount = slideUrls ? slideUrls.length : 0;
   console.log('Parámetros recibidos:', { 
-    slideUrls, 
+    slideCount,
     videoName, 
     businessId, 
     duration, 
     logoUrl: logoUrl ? 'presente' : 'no presente' 
   });
   
-  // Validaciones
-  if (!slideUrls || !Array.isArray(slideUrls) || slideUrls.length !== 2) {
+  // Validaciones - ahora acepta 2 o 3 slides
+  if (!slideUrls || !Array.isArray(slideUrls) || slideUrls.length < 2 || slideUrls.length > 3) {
     return res.status(400).json({ 
       success: false, 
-      error: 'Se requieren exactamente 2 slides' 
+      error: 'Se requieren 2 o 3 slides' 
     });
   }
   
@@ -140,7 +140,7 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
     console.log('Directorio temporal:', tempDir);
     
     // Descargar slides
-    console.log('Descargando slides...');
+    console.log(`Descargando ${slideCount} slides...`);
     const imagePaths = [];
     for (let i = 0; i < slideUrls.length; i++) {
       const response = await fetch(slideUrls[i]);
@@ -173,46 +173,67 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
     
     // Generar video con FFmpeg
     const outputPath = path.join(tempDir, 'output.mp4');
-    console.log('Ejecutando FFmpeg...');
+    console.log(`Ejecutando FFmpeg con ${slideCount} slides...`);
     
-    // Calcular duración de transición
     const transitionDuration = 0.5;
-    const totalDuration = (duration * 2) - transitionDuration;
+    // Duración total: N slides * duration - (N-1) transiciones
+    const totalDuration = (slideCount * duration) - ((slideCount - 1) * transitionDuration);
     
-    // Construir argumentos de FFmpeg
-    let ffmpegArgs = [
-      '-y',
-      '-loop', '1', '-t', String(duration), '-i', imagePaths[0],
-      '-loop', '1', '-t', String(duration), '-i', imagePaths[1]
-    ];
+    // Construir argumentos de FFmpeg - inputs
+    let ffmpegArgs = ['-y'];
+    for (let i = 0; i < slideCount; i++) {
+      ffmpegArgs.push('-loop', '1', '-t', String(duration), '-i', imagePaths[i]);
+    }
     
     // Agregar logo si existe
     if (logoPath) {
       ffmpegArgs.push('-i', logoPath);
     }
     
-    // Construir filter_complex
+    // Construir filter_complex dinámico
     let filterComplex;
-    if (logoPath) {
-      // Con logo y transición crossfade
-      filterComplex = [
-        // Escalar slides a 1920x1080
-        '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
-        '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
-        // Escalar logo (120px de ancho)
-        '[2:v]scale=120:-1[logo]',
-        // Aplicar crossfade entre slides
-        `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${duration - transitionDuration}[xfaded]`,
-        // Overlay del logo en esquina inferior derecha
-        '[xfaded][logo]overlay=W-w-30:H-h-30[outv]'
-      ].join(';');
+    
+    if (slideCount === 2) {
+      // === 2 SLIDES ===
+      if (logoPath) {
+        filterComplex = [
+          '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
+          '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
+          '[2:v]scale=120:-1[logo]',
+          `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${duration - transitionDuration}[xfaded]`,
+          '[xfaded][logo]overlay=W-w-30:H-h-30[outv]'
+        ].join(';');
+      } else {
+        filterComplex = [
+          '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
+          '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
+          `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${duration - transitionDuration}[outv]`
+        ].join(';');
+      }
     } else {
-      // Solo transición crossfade, sin logo
-      filterComplex = [
-        '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
-        '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
-        `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${duration - transitionDuration}[outv]`
-      ].join(';');
+      // === 3 SLIDES ===
+      const offset1 = duration - transitionDuration;
+      const offset2 = (2 * duration) - (2 * transitionDuration);
+      
+      if (logoPath) {
+        filterComplex = [
+          '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
+          '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
+          '[2:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v2]',
+          '[3:v]scale=120:-1[logo]',
+          `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${offset1}[xf1]`,
+          `[xf1][v2]xfade=transition=fade:duration=${transitionDuration}:offset=${offset2}[xfaded]`,
+          '[xfaded][logo]overlay=W-w-30:H-h-30[outv]'
+        ].join(';');
+      } else {
+        filterComplex = [
+          '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v0]',
+          '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v1]',
+          '[2:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v2]',
+          `[v0][v1]xfade=transition=fade:duration=${transitionDuration}:offset=${offset1}[xf1]`,
+          `[xf1][v2]xfade=transition=fade:duration=${transitionDuration}:offset=${offset2}[outv]`
+        ].join(';');
+      }
     }
     
     ffmpegArgs.push(
@@ -226,7 +247,7 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
       outputPath
     );
     
-    console.log('FFmpeg args:', ffmpegArgs.join(' '));
+    console.log('FFmpeg filter_complex:', filterComplex);
     
     await new Promise((resolve, reject) => {
       const ffmpeg = spawn('ffmpeg', ffmpegArgs);
@@ -235,7 +256,6 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
       
       ffmpeg.stderr.on('data', (data) => {
         stderr += data.toString();
-        // Log progress
         const timeMatch = data.toString().match(/time=(\d{2}:\d{2}:\d{2})/);
         if (timeMatch) {
           console.log('FFmpeg progress:', timeMatch[1]);
@@ -256,14 +276,12 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
         reject(new Error(`FFmpeg spawn error: ${err.message}`));
       });
       
-      // Timeout de 60 segundos
       setTimeout(() => {
         ffmpeg.kill('SIGKILL');
         reject(new Error('FFmpeg timeout after 60 seconds'));
       }, 60000);
     });
     
-    // Verificar que el video se generó
     if (!fs.existsSync(outputPath)) {
       throw new Error('El archivo de video no fue creado');
     }
@@ -311,7 +329,6 @@ app.post('/generate-video', authenticateRequest, async (req, res) => {
     console.error('Message:', error.message);
     console.error('Stack:', error.stack);
     
-    // Limpiar archivos temporales en caso de error
     try {
       if (fs.existsSync(tempDir)) {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -341,7 +358,6 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('==============================================');
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM recibido, cerrando servidor...');
   server.close(() => process.exit(0));
